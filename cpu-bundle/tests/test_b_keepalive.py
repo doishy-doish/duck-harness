@@ -4,13 +4,20 @@ Runs the REAL patched HarnessSolver (solver.patched.py as solver.py) against a
 local competition-mode arcade with STALE_MINUTES=1, while the analyzer NEVER
 answers (startup starvation, like the dry-run's 900s ConnectionError loop).
 
-Two runs:
+Two runs, each on a FRESH server (the gateway allows one scorecard lifetime
+per arcade):
   B1 control:  keep-alive disabled  (ARC3_STARTUP_KEEPALIVE_SECONDS=0).
-       Expect: shared scorecard auto-closes ~60s in; games stall; keep-alive
-       lines absent from the log.
-  B2 patched:  keep-alive forced on (FORCE=1, interval 30s, max 6).
-       Expect: "startup keep-alive RESET" lines in the log; scorecard still
-       open while games stall.
+       Expect: games stall and give_up at 0.00; log has NO
+       'startup keep-alive RESET' lines.
+  B2 patched:  keep-alive forced on (FORCE=1, interval 30s->clamped 60s,
+       max 3 events).
+       Expect: 'startup keep-alive RESET ... issued' lines in the log;
+       scorecard still open (GET 200) while games stall.
+
+Starvation model: the stub analyzer RAISES ConnectionError (it never
+returns). Returning a retryable_failure would trip the solver's
+"analyzer contact" tripwire and stop the keep-alive — the dry-run log
+shows ConnectionError retries, so raising is the faithful model.
 
 Needs (Kaggle CPU notebook, internet ON):
   pip install arc-agi arcengine flask pydantic requests
@@ -24,12 +31,13 @@ Usage:
 """
 
 import asyncio
+import json
 import os
 import sys
 import tempfile
 import time
+import urllib.request
 from pathlib import Path
-from types import SimpleNamespace
 
 # MUST precede any arc_agi import: the idle timeout is read at import time.
 os.environ["STALE_MINUTES"] = "1"
@@ -48,9 +56,16 @@ from taaf.game_api import ArcadeSpec, GameAPI  # noqa: E402
 import arc_agi  # noqa: E402
 from inference.framework.solver import HarnessSolver  # noqa: E402
 
+API_KEY = os.environ.get("ARC_API_KEY", "test-key-123")
+
 
 class StarvingAnalyzer:
-    """Never answers: mimics a model server still loading weights."""
+    """Never answers: raises like a model server still loading weights.
+
+    Must RAISE (ConnectionError, as in the dry-run log), not return a
+    retryable failure: any returned result trips the solver's first-contact
+    tripwire and stops the keep-alive task.
+    """
 
     total_tokens = 0
 
@@ -60,16 +75,14 @@ class StarvingAnalyzer:
     def analyze(self, *args, **kwargs):
         self.calls += 1
         time.sleep(5)
-        return SimpleNamespace(
-            retryable_failure=True, yielded_control=False, step_executed=False
-        )
+        raise ConnectionError("model server still loading (stub starvation)")
 
 
 def run_once(*, keepalive: bool, workdir: Path, game_ids, server_base_url):
     if keepalive:
         os.environ["ARC3_STARTUP_KEEPALIVE_FORCE"] = "1"
-        os.environ["ARC3_STARTUP_KEEPALIVE_SECONDS"] = "30"
-        os.environ["ARC3_STARTUP_KEEPALIVE_MAX_EVENTS"] = "6"
+        os.environ["ARC3_STARTUP_KEEPALIVE_SECONDS"] = "30"  # clamped to 60s floor
+        os.environ["ARC3_STARTUP_KEEPALIVE_MAX_EVENTS"] = "3"
     else:
         os.environ["ARC3_STARTUP_KEEPALIVE_FORCE"] = "0"
         os.environ["ARC3_STARTUP_KEEPALIVE_SECONDS"] = "0"
@@ -83,6 +96,9 @@ def run_once(*, keepalive: bool, workdir: Path, game_ids, server_base_url):
     solver_mod.STARTUP_KEEPALIVE_FORCE = (
         os.environ.get("ARC3_STARTUP_KEEPALIVE_FORCE", "0").strip().lower()
         in {"1", "true", "yes", "on"}
+    )
+    solver_mod.STARTUP_KEEPALIVE_MAX_EVENTS = int(
+        os.environ.get("ARC3_STARTUP_KEEPALIVE_MAX_EVENTS", "6")
     )
 
     spec = ArcadeSpec(
@@ -126,6 +142,18 @@ def discover_ids(n):
     return ids[:n]
 
 
+def get_card(base_url, card_id, timeout=15):
+    url = base_url + f"/api/scorecard/{card_id}"
+    req = urllib.request.Request(
+        url, headers={"X-API-Key": API_KEY}, method="GET"
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status, resp.read().decode("utf-8", "replace")
+    except Exception as exc:  # noqa: BLE001
+        return -1, repr(exc)
+
+
 def main():
     env_files = os.environ["ENV_FILES"]
     ids = discover_ids(3)
@@ -162,9 +190,14 @@ def main():
                 server_base_url=s2.base_url,
             )
             print(f"B2 keepalive done, card was {card2}", flush=True)
+            st, body = get_card(s2.base_url, card2)
+            print(
+                f"B2: GET card after stall -> status={st} body={body[:200]} (expect 200)",
+                flush=True,
+            )
         print(
-            "Compare: B1 log should have NO 'startup keep-alive RESET' lines "
-            "(card auto-closed ~60s in); B2 log should show them every ~30s.",
+            "Compare: B1 log should have NO 'startup keep-alive RESET' lines; "
+            "B2 log should show them ~every 60s.",
             flush=True,
         )
     finally:
