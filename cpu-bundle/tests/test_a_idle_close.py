@@ -80,19 +80,20 @@ def discover_ids(n):
 def main():
     global BASE
     ids = discover_ids(2)
-    server = competition_arcade.CompetitionArcadeServer(
+    # Run 1 on server 1: idle past the stale clock.
+    s1 = competition_arcade.CompetitionArcadeServer(
         game_ids=ids,
         environments_dir=ENV_FILES,
     ).start()
-    BASE = server.base_url
+    BASE = s1.base_url
     try:
-        available = server.exposed_game_ids
+        available = s1.exposed_game_ids
         print(f"server up at {BASE}, {len(available)} exposed envs", flush=True)
         gid = available[0]
 
         spec = ArcadeSpec(
             operation_mode=arc_agi.OperationMode.COMPETITION,
-            arc_base_url=server.base_url,
+            arc_base_url=s1.base_url,
             environments_dir="",
         )
         session = RunSession()
@@ -117,9 +118,25 @@ def main():
         status2, body2 = rest("GET", f"/api/scorecard/{card1}")
         print(f"run1: GET after blind RESET -> status={status2} body={body2[:300]}", flush=True)
 
-        # ---- Run 2: keep-alive RESETs every 30s ----
-        g2 = GameAPI(env_name=available[1], arcade_spec=spec)
-        g2.start_game(session)
+        # ---- Run 2 on a FRESH server: keep-alive RESETs every 30s ----
+        # (fresh arcade: run1's closed card must not leak into run2)
+    finally:
+        s1.stop()
+    s2 = competition_arcade.CompetitionArcadeServer(
+        game_ids=ids,
+        environments_dir=ENV_FILES,
+    ).start()
+    BASE = s2.base_url
+    try:
+        available2 = s2.exposed_game_ids
+        spec2 = ArcadeSpec(
+            operation_mode=arc_agi.OperationMode.COMPETITION,
+            arc_base_url=s2.base_url,
+            environments_dir="",
+        )
+        session2 = RunSession()
+        g2 = GameAPI(env_name=available2[1], arcade_spec=spec2)
+        g2.start_game(session2)
         card2 = g2._scorecard_id
         print(f"run2: card {card2}", flush=True)
         for i in range(4):
@@ -129,7 +146,7 @@ def main():
         status3, body3 = rest("GET", f"/api/scorecard/{card2}")
         print(f"run2: GET after keep-alives -> status={status3} body={body3[:300]}", flush=True)
     finally:
-        server.stop()
+        s2.stop()
 
 
 if __name__ == "__main__":

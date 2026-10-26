@@ -129,27 +129,37 @@ def discover_ids(n):
 def main():
     env_files = os.environ["ENV_FILES"]
     ids = discover_ids(3)
-    server = competition_arcade.CompetitionArcadeServer(
+    # Fresh server per phase: the gateway arcade allows one scorecard
+    # lifetime, so B1's closed/conflicted card must not leak into B2.
+    s1 = competition_arcade.CompetitionArcadeServer(
         game_ids=ids,
         environments_dir=env_files,
     ).start()
     try:
-        game_ids = server.exposed_game_ids[:3]
+        game_ids = s1.exposed_game_ids[:3]
         print(f"server up, using {game_ids}", flush=True)
         with tempfile.TemporaryDirectory(prefix="cpu-b1-") as d1:
             card1 = run_once(
                 keepalive=False,
                 workdir=Path(d1),
                 game_ids=game_ids,
-                server_base_url=server.base_url,
+                server_base_url=s1.base_url,
             )
             print(f"B1 control done, card was {card1}", flush=True)
+    finally:
+        s1.stop()
+    s2 = competition_arcade.CompetitionArcadeServer(
+        game_ids=ids,
+        environments_dir=env_files,
+    ).start()
+    try:
+        game_ids2 = s2.exposed_game_ids[:3]
         with tempfile.TemporaryDirectory(prefix="cpu-b2-") as d2:
             card2 = run_once(
                 keepalive=True,
                 workdir=Path(d2),
-                game_ids=game_ids,
-                server_base_url=server.base_url,
+                game_ids=game_ids2,
+                server_base_url=s2.base_url,
             )
             print(f"B2 keepalive done, card was {card2}", flush=True)
         print(
@@ -158,7 +168,7 @@ def main():
             flush=True,
         )
     finally:
-        server.stop()
+        s2.stop()
 
 
 if __name__ == "__main__":
