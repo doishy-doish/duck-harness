@@ -31,12 +31,10 @@ Usage:
 """
 
 import asyncio
-import json
 import os
 import sys
 import tempfile
 import time
-import urllib.request
 from pathlib import Path
 
 # MUST precede any arc_agi import: the idle timeout is read at import time.
@@ -60,11 +58,15 @@ API_KEY = os.environ.get("ARC_API_KEY", "test-key-123")
 
 
 class StarvingAnalyzer:
-    """Never answers: raises like a model server still loading weights.
+    """Never answers: blocks past the solver timeout, like a model server
+    still loading weights (the dry-run's 900s ConnectionError loop, which
+    the solver turns into 'timed out, yielding with 0 tool calls' stalls).
 
-    Must RAISE (ConnectionError, as in the dry-run log), not return a
-    retryable failure: any returned result trips the solver's first-contact
-    tripwire and stops the keep-alive task.
+    Must BLOCK (not raise, not return): raising crashes the game run, and
+    any returned result trips the solver's first-contact tripwire and
+    stops the keep-alive task. Blocking past analyzer_timeout (30s) lets
+    the solver's own timeout path stall the game while keeping it
+    'playing' — the faithful starvation model.
     """
 
     total_tokens = 0
@@ -74,8 +76,12 @@ class StarvingAnalyzer:
 
     def analyze(self, *args, **kwargs):
         self.calls += 1
-        time.sleep(5)
-        raise ConnectionError("model server still loading (stub starvation)")
+        time.sleep(90)  # past analyzer_timeout=30; solver timeout yields
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            retryable_failure=True, yielded_control=False, step_executed=False
+        )
 
 
 def run_once(*, keepalive: bool, workdir: Path, game_ids, server_base_url):
@@ -142,16 +148,8 @@ def discover_ids(n):
     return ids[:n]
 
 
-def get_card(base_url, card_id, timeout=15):
-    url = base_url + f"/api/scorecard/{card_id}"
-    req = urllib.request.Request(
-        url, headers={"X-API-Key": API_KEY}, method="GET"
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.status, resp.read().decode("utf-8", "replace")
-    except Exception as exc:  # noqa: BLE001
-        return -1, repr(exc)
+def mgr_of(server):
+    return server._api.arcade.scorecard_manager
 
 
 def main():
@@ -190,9 +188,12 @@ def main():
                 server_base_url=s2.base_url,
             )
             print(f"B2 keepalive done, card was {card2}", flush=True)
-            st, body = get_card(s2.base_url, card2)
+            m2 = mgr_of(s2)
             print(
-                f"B2: GET card after stall -> status={st} body={body[:200]} (expect 200)",
+                f"B2: card present={card2 in m2.scorecards} "
+                f"stale={card2 in m2.get_stale_cards()} "
+                f"should_close={m2.should_auto_close_scorecard(card2)} "
+                f"(expect True/False/False)",
                 flush=True,
             )
         print(

@@ -1,19 +1,25 @@
-"""Test A — reproduce the 15-minute idle scorecard close on CPU.
+"""Test A — reproduce the 15-minute idle scorecard close on CPU (v6).
 
 Uses the REAL arc-agi 0.9.9 server code (competition_mode=True) with
 STALE_MINUTES=1 (minimum allowed) so the 15-minute clock becomes ~60s.
-The gateway sweeper ticks every 60s and deletes stale cards, so an idle
-card is gone (HTTP 404) shortly after 60s idle.
 
-Run 1 (fresh server): open card, one RESET, GET (expect 200), idle 135s,
-  GET (expect 404 = auto-closed + deleted), blind RESET (expect no
-  exception = post-close silence, the Succeeded + 0.00 signature).
-Run 2 (fresh server): open card, RESET every 30s x5 (span ~150s),
-  GET (expect 200 = periodic RESET refreshes last_update and defeats
-  the clock — the core assumption behind the keep-alive fix).
+Local note: CompetitionArcadeServer does not start the gateway's
+per-minute sweeper thread, so this test replicates the sweeper tick
+in-process with the EXACT production functions
+(get_stale_cards + should_auto_close_scorecard + close_scorecard).
+HTTP GET is useless as a probe here: competition-mode cards always
+answer 403 while open and 404 once deleted.
 
-Auth note: GET /api/scorecard/<id> requires the X-API-Key header
-(default "1234"); without it every GET 404s regardless of state.
+Run 1 (fresh server): open card, one RESET.
+  Expect: card present, not stale, should_auto_close False.
+  Idle 135s.
+  Expect: card in get_stale_cards, should_auto_close True; after the
+  replicated tick the card is DELETED from the manager; a further blind
+  RESET raises no exception (NOT_PLAYED silence = Succeeded + 0.00).
+Run 2 (fresh server): open card, RESET every 30s x5 (span ~150s).
+  Expect: card NOT stale, should_auto_close False, last_update age <60s
+  (periodic RESET refreshes last_update and defeats the clock — the
+  core assumption behind the keep-alive fix).
 
 Needs (Kaggle CPU notebook, internet ON):
   pip install arc-agi arcengine flask pydantic requests
@@ -25,11 +31,9 @@ Usage:
   python test_a_idle_close.py
 """
 
-import json
 import os
 import sys
 import time
-import urllib.request
 from pathlib import Path
 
 BUNDLE = Path(os.environ.get("CPU_BUNDLE", "/kaggle/working/cpu_bundle"))
@@ -48,23 +52,21 @@ import arc_agi  # noqa: E402
 from arcengine import ActionInput, GameAction  # noqa: E402
 
 ENV_FILES = os.environ["ENV_FILES"]
-API_KEY = os.environ.get("ARC_API_KEY", "test-key-123")
-BASE = None
 
 
-def rest(method, path, payload=None, timeout=15):
-    url = BASE + path
-    data = None
-    headers = {"X-API-Key": API_KEY}
-    if payload is not None:
-        data = json.dumps(payload).encode()
-        headers["Content-Type"] = "application/json"
-    req = urllib.request.Request(url, data=data, headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.status, resp.read().decode("utf-8", "replace")
-    except Exception as exc:  # noqa: BLE001 - surface HTTP errors as text
-        return -1, repr(exc)
+def mgr_of(server):
+    return server._api.arcade.scorecard_manager
+
+
+def sweeper_tick(mgr):
+    """Replicate the gateway's per-minute sweeper tick exactly."""
+    closed = []
+    for cid in mgr.get_stale_cards():
+        if mgr.should_auto_close_scorecard(cid):
+            scorecard, guids, _ = mgr.close_scorecard(cid, None)
+            if scorecard is not None:
+                closed.append(cid)
+    return closed
 
 
 def discover_ids(n):
@@ -83,17 +85,15 @@ def discover_ids(n):
 
 
 def main():
-    global BASE
     ids = discover_ids(2)
     # ---- Run 1 on server 1: idle past the stale clock ----
     s1 = competition_arcade.CompetitionArcadeServer(
         game_ids=ids,
         environments_dir=ENV_FILES,
     ).start()
-    BASE = s1.base_url
     try:
         available = s1.exposed_game_ids
-        print(f"server up at {BASE}, {len(available)} exposed envs", flush=True)
+        print(f"server up, {len(available)} exposed envs", flush=True)
         spec = ArcadeSpec(
             operation_mode=arc_agi.OperationMode.COMPETITION,
             arc_base_url=s1.base_url,
@@ -103,16 +103,31 @@ def main():
         g1 = GameAPI(env_name=available[0], arcade_spec=spec)
         g1.start_game(session)
         card1 = g1._scorecard_id
+        m1 = mgr_of(s1)
         print(f"run1: card {card1}", flush=True)
-        s0, b0 = rest("GET", f"/api/scorecard/{card1}")
-        print(f"run1: GET fresh card -> status={s0} (expect 200)", flush=True)
+        print(
+            f"run1: fresh: present={card1 in m1.scorecards} "
+            f"stale={card1 in m1.get_stale_cards()} "
+            f"should_close={m1.should_auto_close_scorecard(card1)} "
+            f"(expect True/False/False)",
+            flush=True,
+        )
         g1.execute_action(ActionInput(id=GameAction.RESET, data={}))
         print("run1: RESET issued, idling 135s ...", flush=True)
         time.sleep(135)
-        status, body = rest("GET", f"/api/scorecard/{card1}")
-        print(f"run1: GET after idle -> status={status} body={body[:200]} (expect 404)", flush=True)
-
-        # blind play after close: must not raise, must not score
+        stale1 = card1 in m1.get_stale_cards()
+        should1 = m1.should_auto_close_scorecard(card1)
+        print(
+            f"run1: after idle: stale={stale1} should_close={should1} (expect True/True)",
+            flush=True,
+        )
+        closed = sweeper_tick(m1)
+        print(
+            f"run1: sweeper tick closed {len(closed)}; "
+            f"card present={card1 in m1.scorecards} (expect False)",
+            flush=True,
+        )
+        # blind play after close: must not raise (NOT_PLAYED silence)
         try:
             g1.execute_action(ActionInput(id=GameAction.RESET, data={}))
             print("run1: post-close RESET executed without exception", flush=True)
@@ -121,12 +136,10 @@ def main():
     finally:
         s1.stop()
     # ---- Run 2 on a FRESH server: keep-alive RESETs every 30s ----
-    # (fresh arcade: run1's closed card must not leak into run2)
     s2 = competition_arcade.CompetitionArcadeServer(
         game_ids=ids,
         environments_dir=ENV_FILES,
     ).start()
-    BASE = s2.base_url
     try:
         available2 = s2.exposed_game_ids
         spec2 = ArcadeSpec(
@@ -138,14 +151,19 @@ def main():
         g2 = GameAPI(env_name=available2[1], arcade_spec=spec2)
         g2.start_game(session2)
         card2 = g2._scorecard_id
+        m2 = mgr_of(s2)
         print(f"run2: card {card2}", flush=True)
         for i in range(5):
             g2.execute_action(ActionInput(id=GameAction.RESET, data={}))
             print(f"run2: keep-alive RESET {i + 1}/5", flush=True)
             time.sleep(30)
-        status3, body3 = rest("GET", f"/api/scorecard/{card2}")
+        idle = m2.idle_duration_for(card2)
+        idle_s = idle.total_seconds() if idle is not None else -1.0
         print(
-            f"run2: GET after keep-alives -> status={status3} body={body3[:200]} (expect 200)",
+            f"run2: after keep-alives: present={card2 in m2.scorecards} "
+            f"stale={card2 in m2.get_stale_cards()} "
+            f"should_close={m2.should_auto_close_scorecard(card2)} "
+            f"idle_s={idle_s:.1f} (expect True/False/False/<60)",
             flush=True,
         )
     finally:
