@@ -33,6 +33,7 @@ APPLIERS = [
     "apply_hierarchy.py",
     "apply_catts.py",
     "apply_mechsummary.py",
+    "apply_abstention.py",
 ]
 
 # Anchors: (file, needle, expect_on_public, note)
@@ -133,7 +134,7 @@ def main():
         if expect_public >= 1 and c != expect_public:
             fail("anchor %r in %s: found %d, want %d" % (needle[:60], fname, c, expect_public))
 
-    print("== 6. live merge (hailmary + hierarchy) on /tmp copy ==")
+    print("== 6. live merge (hailmary + hierarchy + abstention) on /tmp copy ==")
     if not (AGENT / "tool_agent.py").exists():
         fail("ARC3-Inference agent files missing; cannot live-merge")
     with tempfile.TemporaryDirectory() as td:
@@ -141,7 +142,7 @@ def main():
         # appliers take root = /path/to/ARC3-Inference
         dst = Path(td) / "ARC3-Inference"
         shutil.copytree(str(ROOT / "ARC3-Inference"), str(dst))
-        for name in ("apply_hailmary.py", "apply_hierarchy.py"):
+        for name in ("apply_hailmary.py", "apply_hierarchy.py", "apply_abstention.py"):
             r = subprocess.run([sys.executable, str(STRIDE / name), str(dst)],
                                capture_output=True, text=True)
             print("  ---", name, "rc=", r.returncode)
