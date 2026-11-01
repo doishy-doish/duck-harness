@@ -1,0 +1,31 @@
+# verify-stride — applier verification on our PUBLIC repo (no secrets, no model).
+# Trigger: any push touching stride/** or this file (no dispatch needed, no main-branch copy).
+# What it proves: py_compile + banned-scan + insert semantics + anchor audit +
+# live merge of hailmary+hierarchy on a /tmp copy. Full 4-merge sim stays in
+# Kaggle Cell-B (needs the 343KB patched bytes; public repo holds the 89KB stock file).
+name: verify-stride
+
+on:
+  push:
+    branches: [cpu-stack-tests]
+    paths:
+      - "stride/**"
+      - ".github/workflows/verify-stride.yml"
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cpu-stack-tests
+      - name: verify stride appliers
+        run: |
+          python3 --version
+          python3 stride/verify_stride.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: verify-stride-log
+          path: stride/
