@@ -13,6 +13,9 @@ What it proves:
      4-merge sim stays in Kaggle Cell-B).
   6. live merge test for the two appliers that SHOULD merge on public bytes
      (hailmary + hierarchy) against a /tmp copy + py_compile of merged result.
+  7. synthetic activation test: fake post-v27 tool_agent (dead ELIF call blocks
+     + game_over anchor + helper stubs) -> apply_activate.py places ONE 12-indent
+     per-turn block BEFORE the game_over anchor, compiles, and skips on rerun.
 
 Exit 0 = syntax + logic + 2 merges green. Anchor mismatches on CATTS/MECH
 are printed as EXPECTED-MISMATCH, not failures.
@@ -34,6 +37,7 @@ APPLIERS = [
     "apply_catts.py",
     "apply_mechsummary.py",
     "apply_abstention.py",
+    "apply_activate.py",
 ]
 
 # Anchors: (file, needle, expect_on_public, note)
@@ -155,6 +159,84 @@ def main():
                   dst / "inference" / "agent" / "tool_agent.py"):
             py_compile.compile(str(f), doraise=True)
         print("  OK merged bytes compile")
+
+    print("== 7. synthetic activation (post-v27 state) ==")
+    FAKE_TOOL = """import os
+
+def _hailmary_sg_parse(agent, text):
+    return None
+
+def _hailmary_sg_line(agent):
+    return ''
+
+def _hailmary_catts_line(history_entries, previous_step_summary):
+    return ''
+
+def _hailmary_abstain_line(history_entries, previous_step_summary):
+    return ''
+
+class Agent:
+    def _build_user_prompt(self):
+        lines = []
+        history_entries = []
+        previous_step_summary = {}
+        if previous_step_summary.get("run_complete"):
+            lines.append("done")
+        elif previous_step_summary.get("level_transition"):
+            lines.append("new level")
+            try:
+                _sgs = list(getattr(self, "_hailmary_subgoals", []) or [])
+                if _sgs:
+                    _i = int(getattr(self, "_hailmary_sg_idx", 0) or 0) % len(_sgs)
+                    self._hailmary_sg_idx = (_i + 1) % len(_sgs)
+            except Exception:
+                pass
+            try:
+                _catts_line = _hailmary_catts_line(history_entries, previous_step_summary)
+            except Exception:
+                _catts_line = ''
+            try:
+                _abstain_line = _hailmary_abstain_line(history_entries, previous_step_summary)
+            except Exception:
+                _abstain_line = ''
+        else:
+            lines.append("same level")
+        if previous_step_summary.get("game_over"):
+            lines.append("game over")
+        return lines
+"""
+    with tempfile.TemporaryDirectory() as td2:
+        ag = Path(td2) / "ARC3-Inference" / "inference" / "agent"
+        ag.mkdir(parents=True)
+        (ag / "tool_agent.py").write_text(FAKE_TOOL, encoding="utf-8")
+        root2 = Path(td2) / "ARC3-Inference"
+        outs = []
+        for run_no in (1, 2):
+            r = subprocess.run([sys.executable, str(STRIDE / "apply_activate.py"), str(root2)],
+                               capture_output=True, text=True)
+            print("  --- activate run", run_no, "rc=", r.returncode)
+            print(r.stdout[-1500:])
+            if r.stderr:
+                print(r.stderr[-1500:])
+            if r.returncode != 0:
+                fail("apply_activate.py synthetic run %d failed" % run_no)
+            outs.append(r.stdout)
+        if "already present" not in outs[1]:
+            fail("apply_activate.py not idempotent on rerun")
+        merged = (ag / "tool_agent.py").read_text(encoding="utf-8")
+        if merged.count("ARC3_ACTIVATE") != 4:
+            fail("merged marker count %d, want 4 (1 comment + 3 fire prints)" % merged.count("ARC3_ACTIVATE"))
+        ml = merged.split("\n")
+        gi = next(i for i, l in enumerate(ml) if 'if previous_step_summary.get("game_over"):' in l)
+        ai = next(i for i, l in enumerate(ml) if "# ARC3_ACTIVATE_V28:" in l)
+        if not (ai < gi):
+            fail("activation block not placed before game_over anchor")
+        if not ml[ai].startswith("            #"):
+            fail("activation block indent != 12, got: %r" % ml[ai][:20])
+        if merged.count('if previous_step_summary.get("game_over"):') != 1:
+            fail("game_over anchor disturbed")
+        py_compile.compile(str(ag / "tool_agent.py"), doraise=True)
+        print("  OK synthetic activation")
 
     print("VERIFY_STRIDE OK")
 
