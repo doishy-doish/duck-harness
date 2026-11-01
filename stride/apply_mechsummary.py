@@ -67,6 +67,15 @@ def insert_after_line(text, needle, new_lines, expect, tag):
     return "\n".join(lines[:pos + 1] + new_lines + lines[pos + 1:])
 
 
+def assert_anchor_once(text, needle, expect, tag):
+    # File-identity check only: proves we are in the right file. Module-level
+    # helpers are APPENDED at EOF (never inserted after a `def` line — that
+    # breaks the suite: IndentationError, caught by GH verify-stride 2026-11-01).
+    idx = [i for i, l in enumerate(text.split("\n")) if needle in l]
+    if len(idx) != expect:
+        fail("%s: needle %r found %d times, want %d" % (tag, needle[:60], len(idx), expect))
+
+
 def insert_before_line(text, needle, new_lines, expect, tag):
     idx = [i for i, l in enumerate(text.split("\n")) if needle in l]
     if len(idx) != expect:
@@ -83,8 +92,11 @@ def main():
     tool = root / "inference" / "agent" / "tool_agent.py"
     tt = tool.read_text(encoding="utf-8")
     if "_hailmary_mechanical_text" not in tt:
-        tt = insert_after_line(tt, HELPER_DEF_ANCHOR, MECH_HELPER.split("\n"), 1, "tool-mechhelper")
+        assert_anchor_once(tt, HELPER_DEF_ANCHOR, 1, "tool-mechhelper")
         tt = insert_before_line(tt, INTERVAL_ANCHOR, MECH_GATE.split("\n"), 1, "tool-mechgate")
+        if not tt.endswith("\n"):
+            tt += "\n"
+        tt = tt + MECH_HELPER + "\n"
         tool.write_text(tt, encoding="utf-8")
     else:
         print("MECHSUMMARY already present; skipping tool hunks")
