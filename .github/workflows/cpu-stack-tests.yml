@@ -14,7 +14,7 @@ on:
 
 jobs:
   halfb:
-    if: ${{ inputs.model == 'both' || inputs.model == 'halfb' }}
+    if: ${{ github.event.inputs.model == 'both' || github.event.inputs.model == 'halfb' }}
     runs-on: ubuntu-latest
     timeout-minutes: 300
     steps:
@@ -40,7 +40,7 @@ jobs:
           path: out-05b.jsonl
 
   threeb:
-    if: ${{ inputs.model == 'both' || inputs.model == 'threeb' }}
+    if: ${{ github.event.inputs.model == 'both' || github.event.inputs.model == 'threeb' }}
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
