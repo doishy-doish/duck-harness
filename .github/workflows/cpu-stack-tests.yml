@@ -1,0 +1,66 @@
+# CPU stack tests — whole-stack single runs, live log is the instrument.
+# Runs on our PUBLIC repo (required). Kaggle-CPU variant in scratch/kaggle-cpu/.
+# Matrix: 0.5B (100 turns, harness-side fires) + 3B (28 turns, emission check).
+name: cpu-stack-tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "which arms"
+        default: "both"
+        type: choice
+        options: [both, halfb, threeb]
+
+jobs:
+  halfb:
+    if: ${{ inputs.model == 'both' || inputs.model == 'halfb' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: models
+          key: qwen25-05b-q4
+      - name: fetch 0.5B Q4
+        run: |
+          mkdir -p models
+          test -f models/Qwen2.5-0.5B-Instruct-Q4_0.gguf || \
+          curl -L -o models/Qwen2.5-0.5B-Instruct-Q4_0.gguf \
+            https://huggingface.co/bartowski/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/Qwen2.5-0.5B-Instruct-Q4_0.gguf
+      - name: stack off vs on, same games
+        run: |
+          pip install llama-cpp-python==0.3.9 2>&1 | tail -1
+          python cpu_stack_test.py --model models/Qwen2.5-0.5B-Instruct-Q4_0.gguf \
+            --arms off,on --turns 100 --out out-05b.jsonl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: out-05b
+          path: out-05b.jsonl
+
+  threeb:
+    if: ${{ inputs.model == 'both' || inputs.model == 'threeb' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: models
+          key: qwen25-3b-q4
+      - name: fetch 3B Q4
+        run: |
+          mkdir -p models
+          test -f models/Qwen2.5-3B-Instruct-Q4_0.gguf || \
+          curl -L -o models/Qwen2.5-3B-Instruct-Q4_0.gguf \
+            https://huggingface.co/bartowski/Qwen2.5-3B-Instruct-GGUF/resolve/main/Qwen2.5-3B-Instruct-Q4_0.gguf
+      - name: emission + compounding probe
+        run: |
+          pip install llama-cpp-python==0.3.9 2>&1 | tail -1
+          python cpu_stack_test.py --model models/Qwen2.5-3B-Instruct-Q4_0.gguf \
+            --arms on --turns 28 --emit-check --out out-3b.jsonl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: out-3b
+          path: out-3b.jsonl
