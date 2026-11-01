@@ -134,7 +134,7 @@ def main():
         print("P1/P2 already present; skipping prompts hunk")
     if "_hailmary_par_line" not in tt:
         assert_anchor_once(tt, HELPER_DEF_ANCHOR, 1, "tool-helper")
-        tt = insert_after_line(tt, STEM_ANCHOR, ['                self._hailmary_run_stem = getattr(state_path, "stem", "")'], 1, "tool-stem")
+        tt = insert_after_line(tt, STEM_ANCHOR, ['            self._hailmary_run_stem = getattr(state_path, "stem", "")'], 1, "tool-stem")
         tt = insert_after_line(tt, ELIF_NEEDLE, H1_CALL.split("\n"), 1, "tool-h1call")
         if not tt.endswith("\n"):
             tt += "\n"
