@@ -38,6 +38,7 @@ APPLIERS = [
     "apply_mechsummary.py",
     "apply_abstention.py",
     "apply_activate.py",
+    "apply_throughput_wire.py",
 ]
 
 # Anchors: (file, needle, expect_on_public, note)
@@ -237,6 +238,78 @@ class Agent:
             fail("game_over anchor disturbed")
         py_compile.compile(str(ag / "tool_agent.py"), doraise=True)
         print("  OK synthetic activation")
+
+    print("== 8. synthetic throughput wire (dead-helper call sites + invoke counter) ==")
+    FAKE_WIRE_TOOL = """import os
+
+def _dispatch_game_type(game_name):
+    return "general"
+
+def _combo_cache_lookup(level_key, cache=None):
+    return None
+
+def _timer_mask_core(grid, border=0, max_rows=61):
+    return grid
+
+class Agent:
+    def _build_user_prompt(self, valid_actions, current_frame, history_entries):
+        current_level = 1
+        lines = []
+        self._death_ledger_observe(history_entries, previous_step_summary)
+        return lines
+
+    def _action_guard_hook(self, grid, action_name, level):
+        rows = [list(row) for row in grid]
+        state_hash = _interior_state_hash(rows)
+        self._noop_guard_pre_hash = state_hash
+        return None
+"""
+    with tempfile.TemporaryDirectory() as td3:
+        ag3 = Path(td3) / "ARC3-Inference" / "inference" / "agent"
+        ag3.mkdir(parents=True)
+        (ag3 / "tool_agent.py").write_text(FAKE_WIRE_TOOL, encoding="utf-8")
+        root3 = Path(td3) / "ARC3-Inference"
+        outs3 = []
+        for run_no in (1, 2):
+            r = subprocess.run([sys.executable, str(STRIDE / "apply_throughput_wire.py"), str(root3)],
+                               capture_output=True, text=True)
+            print("  --- throughput wire run", run_no, "rc=", r.returncode)
+            print(r.stdout[-1500:])
+            if r.stderr:
+                print(r.stderr[-1500:])
+            if r.returncode != 0:
+                fail("apply_throughput_wire.py synthetic run %d failed" % run_no)
+            outs3.append(r.stdout)
+        if "already applied (skip)" not in outs3[1] and "already present (skip)" not in outs3[1]:
+            fail("apply_throughput_wire.py not idempotent on rerun")
+        merged3 = (ag3 / "tool_agent.py").read_text(encoding="utf-8")
+        for marker in ('_throughput_invoke("dispatch", self, current_level)',
+                       '_throughput_invoke("budget", self, current_level)',
+                       '_throughput_invoke("timer", self, level)',
+                       '_throughput_invoke("combo", self, level)',
+                       '_tm_rows = _timer_mask_core(rows)',
+                       '_combo_cache_lookup(level)',
+                       'THROUGHPUT-INVOKE'):
+            if marker not in merged3:
+                fail("throughput wire marker missing: %s" % marker[:50])
+        if merged3.count('_tm_rows = _timer_mask_core(rows)') != 1:
+            fail("timer call site not exactly 1x")
+        ml3 = merged3.split("\n")
+        di = next(i for i, l in enumerate(ml3) if 'self._death_ledger_observe(history_entries' in l)
+        wi = next(i for i, l in enumerate(ml3) if '_throughput_invoke("dispatch"' in l)
+        if not (wi > di):
+            fail("dispatch site not placed after death-ledger anchor")
+        si = next(i for i, l in enumerate(ml3) if 'state_hash = _interior_state_hash(_tm_rows)' in l)
+        if si == -1:
+            fail("timer hash line missing")
+        if not all(l.startswith("        ") for l in ml3[si - 6:si] if l.strip()):
+            fail("timer block indent broken")
+        ci = next(i for i, l in enumerate(ml3) if '_throughput_invoke("combo"' in l)
+        pi = next(i for i, l in enumerate(ml3) if 'self._noop_guard_pre_hash = state_hash' in l)
+        if not (ci < pi):
+            fail("combo site not placed before pre-hash anchor")
+        py_compile.compile(str(ag3 / "tool_agent.py"), doraise=True)
+        print("  OK synthetic throughput wire")
 
     print("VERIFY_STRIDE OK")
 
