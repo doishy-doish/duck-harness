@@ -54,8 +54,8 @@ GUARD_NEW = ("self._noop_guard_pre_hash = state_hash\n"
 
 MECH_NEEDLE = 'getattr(self, "_h1_switches_this_level", 0)'
 MECH_OLD = 'getattr(self, "_h1_switches_this_level", 0))'
-MECH_NEW = ('getattr(self, "_h1_switches_this_level", 0))\n'
-            '                + " goal_inj=%s goal_ref=%s" % (getattr(self, "_goal_injects_this_level", 0), getattr(self, "_goal_refuses_this_level", 0))')
+MECH_NEW = ('getattr(self, "_h1_switches_this_level", 0))'
+            ' + " goal_inj=%s goal_ref=%s" % (getattr(self, "_goal_injects_this_level", 0), getattr(self, "_goal_refuses_this_level", 0))')
 
 GOAL_CORE = '''
 import re as _reG
