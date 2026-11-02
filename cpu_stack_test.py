@@ -64,6 +64,72 @@ def emit_check(llm, out_f):
                                 "next_action": txt[:200], "level": 2, "admitted": has_ref}) + "\n")
     return res
 
+
+# HYPER-NICHE STACK (additive, 2026-11-02) — timer-bar/macro hash, dispatch, combo, temp-diverse, simulator gate.
+import hashlib
+def frame_full_hash(grid): return hashlib.md5(bytes(grid)).hexdigest()
+def frame_content_hash(grid, rows=62, cols=64):
+  return hashlib.md5(bytes(grid[:rows*cols])).hexdigest()
+def macro_stat_hash(grid):
+  n = len(grid); mean = sum(grid)/n
+  var = sum((x-mean)**2 for x in grid)/n; std = var**0.5
+  return (round(mean,1), round(std,1), sum(1 for x in grid if x), len(set(grid)))
+def hyper_hash_selftest(out_f):
+  W=64; base=[(r*W+c)%7 for r in range(64) for c in range(W)]
+  fulls=set(); contents=set(); macros=set()
+  for t in range(6):
+    g=list(base)
+    for c in range(0,12+2*t,1): g[63*W+c]=9
+    fulls.add(frame_full_hash(g)); contents.add(frame_content_hash(g)); macros.add(macro_stat_hash(g))
+  res={"full_changes":len(fulls)>1,"content_stable":len(contents)==1,"macro_stable":len(macros)==1,
+       "full_n":len(fulls),"content_n":len(contents),"macro_n":len(macros)}
+  out_f.write(__import__("json").dumps({"t":"hyper-hash","mech":"hash","fire":1 if res["content_stable"] else 0,"next_action":str(res),"level":0,"arm":"hyper"})+"\n")
+  return res
+def dispatch_prompt(avail):
+  s=set(avail)
+  if 6 in s and any(a in s for a in (1,2,3,4,5)): return "ARC-PUZZLE: grid quadrants, color cycling. "
+  if s<={1,2,3,4}: return "MOVEMENT: corridors, object tracking, reach target. "
+  if s=={6}: return "CLICK-ONLY: identify interactive targets from static screenshot. "
+  return "GENERAL: "
+def hyper_dispatch_selftest():
+  return {"arc":dispatch_prompt([1,2,3,4,5,6])[:9],"move":dispatch_prompt([1,2,3,4])[:8],"click":dispatch_prompt([6])[:10]}
+def temp_diverse_sample(llm, prompt):
+  outs=[]
+  for temp in (0.0,0.7,1.0):
+    try:
+      r=llm.create_chat_completion(messages=[{"role":"system","content":"Reply one line: CONTINUE or GIVE_UP, then one sentence."},{"role":"user","content":prompt}],max_tokens=120,temperature=temp)
+      outs.append(r["choices"][0]["message"]["content"].strip()[:200])
+    except Exception as e: outs.append("ERR:"+str(e)[:60])
+  distinct=len(set(outs)); switch=sum(1 for o in outs if "switch" in o.lower() or "different" in o.lower() or "instead" in o.lower())
+  return {"outs":outs,"distinct":distinct,"switch":switch}
+FENCE="```"
+def simulator_gate_test(llm, out_f, tries=2):
+  trans=[(s,a,(s*3+a)%17) for s in range(10) for a in (1,2)][:20]
+  body="\n".join("(%d,%d)->%d"%(s,a,n) for s,a,n in trans)
+  prompt=("Write ONE python function step(state,action) returning next state. Observed transitions:\n"+body+"\nRule is arithmetic. Output exactly one fenced python block with the function, no other text.")
+  ok=0; detail=[]
+  for i in range(tries):
+    try:
+      r=llm.create_chat_completion(messages=[{"role":"system","content":"Output exactly one python fence."},{"role":"user","content":prompt}],max_tokens=300,temperature=0.0)
+      txt=r["choices"][0]["message"]["content"]
+      import re
+      m=re.search(FENCE+r"python(.*?)"+FENCE,txt,re.S) or re.search(FENCE+r"(.*?)"+FENCE,txt,re.S)
+      code=(m.group(1) if m else txt)
+      ns={}
+      exec(code,ns)
+      fn=ns.get("step") or ns.get("f") or ns.get("next_state")
+      good=0
+      if callable(fn):
+        for s,a,n in trans:
+          try:
+            if int(fn(s,a))==n: good+=1
+          except Exception: pass
+      detail.append(good); ok=max(ok,good)
+      out_f.write(__import__("json").dumps({"t":"sim-%d"%i,"mech":"simulator","fire":1 if good>=16 else 0,"next_action":"repro %d/20"%good,"level":0,"arm":"hyper"})+"\n")
+    except Exception as e:
+      detail.append("ERR:"+str(e)[:60])
+  return {"best":ok,"detail":detail,"pass":ok>=16}
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True)
@@ -79,6 +145,15 @@ def main():
             summary["arms"][arm] = run_arm(llm, arm.strip(), a.turns, f)
         if a.emit_check:
             summary["emission"] = emit_check(llm, f)
+        try:
+            summary["hyper_hash"] = hyper_hash_selftest(f)
+            summary["hyper_dispatch"] = hyper_dispatch_selftest()
+        except Exception as e:
+            summary["hyper_hash_err"] = str(e)[:120]
+        try:
+            summary["simulator"] = simulator_gate_test(llm, f, tries=2)
+        except Exception as e:
+            summary["simulator_err"] = str(e)[:120]
     print(json.dumps(summary, indent=1))
 
 if __name__ == "__main__":
