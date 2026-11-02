@@ -1,4 +1,4 @@
-# cpu_stack_test.py — CPU proxy for the ARC-3 stack (GH Actions + Kaggle CPU).
+# cpu_stack_test.py â CPU proxy for the ARC-3 stack (GH Actions + Kaggle CPU).
 # NOT the full harness (no ARC-3 env here): a prompt-level A/B over stall vignettes.
 # Arms: off (base prompt) vs on (base + H1 ratio line + playbook tail).
 # Emits unified per-turn lines: t=.. mech=.. fire=.. next_action=.. level=..
@@ -65,7 +65,7 @@ def emit_check(llm, out_f):
     return res
 
 
-# HYPER-NICHE STACK (additive, 2026-11-02) — timer-bar/macro hash, dispatch, combo, temp-diverse, simulator gate.
+# HYPER-NICHE STACK (additive, 2026-11-02) â timer-bar/macro hash, dispatch, combo, temp-diverse, simulator gate.
 import hashlib
 def frame_full_hash(grid): return hashlib.md5(bytes(grid)).hexdigest()
 def frame_content_hash(grid, rows=62, cols=64):
@@ -183,7 +183,7 @@ def simulator_gate_test_relaxed(llm, out_f, tries=2):
     if lines: cands.append("\n".join(lines))
     cands.append(txt)
     return cands
-  ok=0; detail=[]
+  ok=0; detail=[]; besthits=[]
   for i in range(tries):
     try:
       r=llm.create_chat_completion(messages=[{"role":"system","content":"Output exactly one python fence."},{"role":"user","content":prompt}],max_tokens=300,temperature=0.0)
@@ -204,17 +204,18 @@ def simulator_gate_test_relaxed(llm, out_f, tries=2):
               except Exception:
                 pass
         if callable(fn):
-          good=0
+          good=0; hitpairs=[]
           for s,a,n in trans:
             try:
-              if int(fn(s,a))==n: good+=1
+              if int(fn(s,a))==n: good+=1; hitpairs.append([s,a])
             except Exception:
               pass
           held=score_heldout(fn)
-          out_f.write(__import__("json").dumps({"t":"sim-relaxed-heldout-%d"%i,"mech":"simcontrol","fire":1 if held>=8 else 0,"next_action":"heldout %d/10 (train %d/20)"%(held,good),"level":0,"arm":"hyper"})+"\n")
+          out_f.write(__import__("json").dumps({"t":"sim-relaxed-heldout-%d"%i,"mech":"simcontrol","fire":1 if held>=8 else 0,"next_action":"heldout %d/10 (train %d/20)"%(held,good),"level":0,"arm":"hyper","hits":hitpairs})+"\n")
+          if good>best: besthits=hitpairs
           best=max(best,good)
       detail.append(best); ok=max(ok,best)
-      out_f.write(__import__("json").dumps({"t":"sim-relaxed-%d"%i,"mech":"simulator","fire":1 if best>=16 else 0,"next_action":"repro %d/20"%best,"level":0,"arm":"hyper"})+"\n")
+      out_f.write(__import__("json").dumps({"t":"sim-relaxed-%d"%i,"mech":"simulator","fire":1 if best>=16 else 0,"next_action":"repro %d/20"%best,"level":0,"arm":"hyper","hits":besthits})+"\n")
     except Exception as e:
       detail.append("ERR:"+str(e)[:60])
   return {"best":ok,"detail":detail,"pass":ok>=16}
