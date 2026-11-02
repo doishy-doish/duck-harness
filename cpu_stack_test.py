@@ -93,15 +93,25 @@ def dispatch_prompt(avail):
   return "GENERAL: "
 def hyper_dispatch_selftest():
   return {"arc":dispatch_prompt([1,2,3,4,5,6])[:9],"move":dispatch_prompt([1,2,3,4])[:8],"click":dispatch_prompt([6])[:10]}
-def temp_diverse_sample(llm, prompt):
+def temp_diverse_sample(llm, prompt, out_f=None):
   outs=[]
-  for temp in (0.0,0.7,1.0):
+  for temp in (0.0,0.55,1.0):
     try:
       r=llm.create_chat_completion(messages=[{"role":"system","content":"Reply one line: CONTINUE or GIVE_UP, then one sentence."},{"role":"user","content":prompt}],max_tokens=120,temperature=temp)
       outs.append(r["choices"][0]["message"]["content"].strip()[:200])
     except Exception as e: outs.append("ERR:"+str(e)[:60])
   distinct=len(set(outs)); switch=sum(1 for o in outs if "switch" in o.lower() or "different" in o.lower() or "instead" in o.lower())
+  if out_f is not None:
+    out_f.write(__import__("json").dumps({"t":"tempdiv","mech":"tempdiv","fire":1 if distinct>=2 else 0,"next_action":"distinct %d/3 switch %d"%(distinct,switch),"level":0,"arm":"hyper"})+"\n")
   return {"outs":outs,"distinct":distinct,"switch":switch}
+HELDOUT=[(s,a,(s*3+a)%17) for s in range(10,15) for a in (1,2)][:10]
+def score_heldout(fn):
+  good=0
+  for s,a,n in HELDOUT:
+    try:
+      if int(fn(s,a))==n: good+=1
+    except Exception: pass
+  return good
 FENCE="```"
 def simulator_gate_test(llm, out_f, tries=2):
   trans=[(s,a,(s*3+a)%17) for s in range(10) for a in (1,2)][:20]
@@ -124,6 +134,8 @@ def simulator_gate_test(llm, out_f, tries=2):
           try:
             if int(fn(s,a))==n: good+=1
           except Exception: pass
+        held=score_heldout(fn)
+        out_f.write(__import__("json").dumps({"t":"sim-heldout-%d"%i,"mech":"simcontrol","fire":1 if held>=8 else 0,"next_action":"heldout %d/10 (train %d/20)"%(held,good),"level":0,"arm":"hyper"})+"\n")
       detail.append(good); ok=max(ok,good)
       out_f.write(__import__("json").dumps({"t":"sim-%d"%i,"mech":"simulator","fire":1 if good>=16 else 0,"next_action":"repro %d/20"%good,"level":0,"arm":"hyper"})+"\n")
     except Exception as e:
@@ -174,6 +186,8 @@ def simulator_gate_test_relaxed(llm, out_f, tries=2):
               if int(fn(s,a))==n: good+=1
             except Exception:
               pass
+          held=score_heldout(fn)
+          out_f.write(__import__("json").dumps({"t":"sim-relaxed-heldout-%d"%i,"mech":"simcontrol","fire":1 if held>=8 else 0,"next_action":"heldout %d/10 (train %d/20)"%(held,good),"level":0,"arm":"hyper"})+"\n")
           best=max(best,good)
       detail.append(best); ok=max(ok,best)
       out_f.write(__import__("json").dumps({"t":"sim-relaxed-%d"%i,"mech":"simulator","fire":1 if best>=16 else 0,"next_action":"repro %d/20"%best,"level":0,"arm":"hyper"})+"\n")
@@ -200,7 +214,7 @@ def main():
             summary["hyper_hash"] = hyper_hash_selftest(f)
             summary["hyper_dispatch"] = hyper_dispatch_selftest()
             try:
-                summary["temp_diverse"] = temp_diverse_sample(llm, "You used 180 actions on level 7 (human par 40), no score increase in 30 actions. Reply one line: CONTINUE or GIVE_UP, then one sentence.")
+                summary["temp_diverse"] = temp_diverse_sample(llm, "You used 180 actions on level 7 (human par 40), no score increase in 30 actions. Reply one line: CONTINUE or GIVE_UP, then one sentence.", f)
             except Exception as e:
                 summary["temp_diverse_err"] = str(e)[:120]
         except Exception as e:
