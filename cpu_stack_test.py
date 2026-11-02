@@ -142,6 +142,30 @@ def simulator_gate_test(llm, out_f, tries=2):
       detail.append("ERR:"+str(e)[:60])
   return {"best":ok,"detail":detail,"pass":ok>=16}
 
+def hier_decompose_probe(llm, out_f, tries=2):
+  import re as _re
+  prompt = ("Game: 8x8 grid, robot at (1,1), red key at (5,2), locked door at (7,7). Exit beyond door. "
+    "Reply with exactly 3 numbered subgoals, each naming a grid entity and one action verb (MOVE/GET/OPEN/GO).")
+  verbs = ("move","get","open","go","push","press","collect","unlock","reach","carry")
+  ents = ("robot","key","door","exit","grid","(1,1)","(5,2)","(7,7)")
+  best = 0; detail = []
+  for i in range(tries):
+    try:
+      r = llm.create_chat_completion(messages=[{"role":"system","content":"Reply with exactly 3 numbered subgoals."},{"role":"user","content":prompt}],max_tokens=200,temperature=0.2)
+      txt = r["choices"][0]["message"]["content"]
+      lines = [l for l in txt.strip().split("\n") if _re.match(r"\s*\d+[\).\:] ", l)]
+      score = 0
+      for l in lines[:3]:
+        ll = l.lower()
+        if any(v in ll for v in verbs): score += 1
+        if any(e in ll for e in ents): score += 1
+      ok = 1 if (len(lines) >= 3 and score >= 4) else 0
+      detail.append((len(lines), score)); best = max(best, ok)
+      out_f.write(__import__("json").dumps({"t":"hier-%d"%i,"mech":"hier","fire":ok,"next_action":"lines %d grounded %d/6"%(len(lines),score),"level":0,"arm":"hyper"})+"\n")
+    except Exception as e:
+      detail.append("ERR:"+str(e)[:60])
+  return {"best":best,"detail":detail,"pass":best>=1}
+
 def simulator_gate_test_relaxed(llm, out_f, tries=2):
   import re
   trans=[(s,a,(s*3+a)%17) for s in range(10) for a in (1,2)][:20]
@@ -227,6 +251,10 @@ def main():
             summary["simulator_relaxed"] = simulator_gate_test_relaxed(llm, f, tries=2)
         except Exception as e:
             summary["simulator_relaxed_err"] = str(e)[:120]
+        try:
+            summary["hier"] = hier_decompose_probe(llm, f, tries=2)
+        except Exception as e:
+            summary["hier_err"] = str(e)[:120]
     print(json.dumps(summary, indent=1))
 
 if __name__ == "__main__":
