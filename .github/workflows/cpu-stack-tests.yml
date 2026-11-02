@@ -1,6 +1,6 @@
 # CPU stack tests — whole-stack single runs, live log is the instrument.
 # Runs on our PUBLIC repo (required). Kaggle-CPU variant in scratch/kaggle-cpu/.
-# Matrix: 0.5B (100 turns, harness-side fires) + 3B (28 turns, emission check).
+# Matrix: 0.5B (100 turns, harness-side fires) + 3B (28 turns, emission check) + 7B (30 turns x off/on, full stack).
 name: cpu-stack-tests
 
 on:
@@ -10,7 +10,7 @@ on:
         description: "which arms"
         default: "both"
         type: choice
-        options: [both, halfb, threeb]
+        options: [both, halfb, threeb, sevenb, all]
 
 jobs:
   halfb:
@@ -64,3 +64,29 @@ jobs:
         with:
           name: out-3b
           path: out-3b.jsonl
+
+  sevenb:
+    if: ${{ github.event.inputs.model == 'sevenb' || github.event.inputs.model == 'all' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: models
+          key: qwen25-7b-q4
+      - name: fetch 7B Q4
+        run: |
+          mkdir -p models
+          test -f models/Qwen2.5-7B-Instruct-Q4_0.gguf || \
+          curl -L -o models/Qwen2.5-7B-Instruct-Q4_0.gguf \
+            https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF/resolve/main/Qwen2.5-7B-Instruct-Q4_0.gguf
+      - name: full stack on 7B
+        run: |
+          pip install llama-cpp-python==0.3.9 2>&1 | tail -1
+          python cpu_stack_test.py --model models/Qwen2.5-7B-Instruct-Q4_0.gguf \
+            --arms off,on --turns 30 --emit-check --out out-7b.jsonl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: out-7b
+          path: out-7b.jsonl
