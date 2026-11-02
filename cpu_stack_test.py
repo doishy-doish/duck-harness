@@ -102,7 +102,7 @@ def temp_diverse_sample(llm, prompt, out_f=None):
     except Exception as e: outs.append("ERR:"+str(e)[:60])
   distinct=len(set(outs)); switch=sum(1 for o in outs if "switch" in o.lower() or "different" in o.lower() or "instead" in o.lower())
   if out_f is not None:
-    out_f.write(__import__("json").dumps({"t":"tempdiv","mech":"tempdiv","fire":1 if distinct>=2 else 0,"next_action":"distinct %d/3 switch %d"%(distinct,switch),"level":0,"arm":"hyper"})+"\n")
+    out_f.write(__import__("json").dumps({"t":"tempdiv","mech":"tempdiv","fire":1 if distinct>=2 else 0,"next_action":"distinct %d/3 switch %d"%(distinct,switch),"level":0,"arm":"hyper","outs":outs})+"\n")
   return {"outs":outs,"distinct":distinct,"switch":switch}
 HELDOUT=[(s,a,(s*3+a)%17) for s in range(10,15) for a in (1,2)][:10]
 def score_heldout(fn):
