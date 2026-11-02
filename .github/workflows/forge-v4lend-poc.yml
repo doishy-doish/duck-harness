@@ -1,0 +1,43 @@
+# Forge PoC runner for v4lend audit tracks (fork-free tests only — no RPC/secrets).
+# Lives on doishy-doish/duck-harness, branch cpu-stack-tests (our CPU repo; v4lend fork untouched).
+# Dispatch: POST /repos/doishy-doish/duck-harness/actions/workflows/forge-v4lend-poc.yml/dispatches
+#   {ref:"cpu-stack-tests", inputs:{contracts:"StaleApprovalPoC|V7BorrowRidingPoC"}} (classic PAT, expect 204)
+name: forge-v4lend-poc
+
+on:
+  workflow_dispatch:
+    inputs:
+      contracts:
+        description: "forge --match-contract regex"
+        default: "StaleApprovalPoC|V7BorrowRidingPoC"
+
+jobs:
+  poc:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: checkout this repo (PoC files)
+        uses: actions/checkout@v4
+        with:
+          ref: cpu-stack-tests
+          path: harness
+      - name: checkout upstream v4lend (pinned)
+        uses: actions/checkout@v4
+        with:
+          repository: revert-finance/v4lend
+          ref: f6d0fb41b7487f60ce64e011312a956e184e2a75
+          submodules: recursive
+          path: v4lend
+      - uses: foundry-rs/foundry-toolchain@v1
+      - name: overlay PoCs
+        run: cp harness/v4lend-poc/*.t.sol v4lend/test/vault/invariants/
+      - name: forge test
+        run: |
+          cd v4lend
+          forge test --match-contract "${{ inputs.contracts }}" -vvv 2>&1 | tee $GITHUB_WORKSPACE/poc.log
+          test ${PIPESTATUS[0]} -eq 0
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: poc-log
+          path: poc.log
