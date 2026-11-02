@@ -151,7 +151,8 @@ def _pp_refuse_regressed(agent, level, action_name, action_data):
             _verb = next((_v for _v in _PP_VERBS if _v in _txt), "")
             _syns = _PP_SYN.get(_verb, (_verb,)) if _verb else ()
             _keys = [_w for _w in _reP.split(r"\\W+", _txt)
-                     if len(_w) >= 4 and _w not in _PP_STOP]
+                     if (len(_w) >= 4 and _w not in _PP_STOP)
+                     or (_w in _PP_ENTS and len(_w) >= 3)]
             _hit = ((any(_s in _prop for _s in _syns) and any(_k in _prop for _k in _keys))
                     or sum(1 for _k in _keys if _k in _prop) >= 2)
             if _hit:
