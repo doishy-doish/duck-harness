@@ -337,6 +337,74 @@ def sim_structured_test(llm, out_f, tries=2):
       detail.append("ERR:" + str(e)[:60])
   return {"best": ok, "detail": detail, "pass": ok >= 8}
 
+def sg_intent_probe(llm, out_f, tries=2):
+  # SG-FEED probe (entry 815, minimal-set pre-flight): does 3B emit intent-marked
+  # prose our pp parser captures? Part B/C are model-free logic (must pass or driver bug:
+  # do NOT dispatch on failure). Part A is the model read (fed>=1 = machinery has input).
+  import re as _re2
+  _V = ("move","get","open","unlock","go","exit","push","collect","carry","use","take","grab","click","press","solve","clear","reach","find","map")
+  _E = ("robot","key","door","exit","button","box","target","switch","lever","gate","tile","room","level","path")
+  _I = ("need to","needs to","next","then","should","plan to","going to","try to","must","will")
+  def _subs(text):
+    out = []
+    try:
+      for _ln in str(text or "").splitlines():
+        _s = _ln.strip()
+        if len(_s) < 8 or len(_s) > 220: continue
+        if _s.upper().startswith("SG:"):
+          _t = _s[3:].strip()
+          if len(_t) > 4 and _t not in out: out.append(_t[:160])
+          continue
+        _l = _s.lower()
+        if any(_k in _l for _k in _I):
+          _v = next((_v for _v in _V if _v in _l), "")
+          _e = next((_e for _e in _E if _e in _l), "")
+          if _v and _e and _s not in out: out.append(_s[:160])
+        if len(out) >= 4: break
+    except Exception: pass
+    return out
+  # Part B: fixed feed cases (expect 3 feed / 3 ignore)
+  _cases = [("I need to get the key next", True), ("plan to move robot to door", True),
+    ("then go to exit", True), ("CLICK(3,7)", False), ("the sky is blue today", False), ("ok", False)]
+  _bok = sum(1 for _t, _w in _cases if ((_subs(_t) and True) or False) == _w)
+  out_f.write(__import__("json").dumps({"t": "sg-feed-unit", "mech": "proseparse", "fire": 1 if _bok == 6 else 0,
+    "next_action": "feed-logic %d/6" % _bok, "level": 0, "arm": "unit"}) + "\n")
+  # Part C: synthetic refusal (passed subgoal "get key", cur idx 1)
+  _sgs = [{"text": "get the key", "stalls": 0, "budget": 0.0}, {"text": "open the door", "stalls": 0, "budget": 0.0}]
+  def _ref(prop):
+    _p = str(prop or "").lower()
+    _t0 = (_sgs[0].get("text", "") or "").lower()
+    if not _t0: return 0
+    import re as _rx
+    _stop = ("with","from","that","this","then","into","have","has","are","was","were","been","the")
+    _syn = {"move": ("move","go"), "get": ("get","take","grab","carry","collect"), "open": ("open","unlock")}
+    _ws = [w for w in _rx.findall(r"[a-z]+", _t0) if w not in _stop]
+    for _w in _ws:
+      _alts = _syn.get(_w, (_w,))
+      if any(_a in _p for _a in _alts): return 1
+    return 0
+  _rok = 1 if (_ref("GET key at (5,2)") == 1 and _ref("OPEN door") == 0) else 0
+  out_f.write(__import__("json").dumps({"t": "sg-refuse-unit", "mech": "proseparse", "fire": _rok,
+    "next_action": "refuse-logic %d/2" % (_rok * 2), "level": 0, "arm": "unit"}) + "\n")
+  # Part A: model emission read (2 tries, stuck vignette -> plan prose -> pp parse)
+  _fed = 0; _det = []
+  for _i in range(tries):
+    try:
+      _r = llm.create_chat_completion(
+        messages=[{"role": "system", "content": "Describe your plan in 2-3 short sentences."},
+                  {"role": "user", "content": "8x8 grid, robot at (1,1), key at (5,2), locked door at (7,7), exit beyond. You are stuck after 40 actions with no progress. Say what you need to do next, naming the robot, key, door or exit."}],
+        max_tokens=200, temperature=0.2)
+      _txt = _r["choices"][0]["message"]["content"]
+      _f = _subs(_txt)
+      _fed = max(_fed, len(_f))
+      _det.append(len(_f))
+      out_f.write(__import__("json").dumps({"t": "sg-emit-%d" % _i, "mech": "proseparse", "fire": 1 if _f else 0,
+        "next_action": "fed %d raw %s" % (len(_f), _txt[:200]), "level": 0, "arm": "sg"}) + "\n")
+    except Exception as _e:
+      _det.append("ERR:" + str(_e)[:60])
+  return {"feed_logic": _bok, "refuse_logic": _rok, "fed_best": _fed, "detail": _det,
+          "pass": _bok == 6 and _rok == 1, "model_has_input": _fed >= 1}
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True)
@@ -381,6 +449,10 @@ def main():
             summary["sim_structured"] = sim_structured_test(llm, f, tries=2)
         except Exception as e:
             summary["sim_structured_err"] = str(e)[:120]
+        try:
+            summary["sg_intent"] = sg_intent_probe(llm, f, tries=2)
+        except Exception as e:
+            summary["sg_intent_err"] = str(e)[:120]
     print(json.dumps(summary, indent=1))
 
 if __name__ == "__main__":
