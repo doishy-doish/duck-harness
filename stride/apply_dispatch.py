@@ -11,7 +11,7 @@ def main():
     if len(sys.argv) != 2: fail("usage: applier.py <bundle-root>")
     tool = Path(sys.argv[1]) / "inference" / "agent" / "tool_agent.py"
     tt = tool.read_text(encoding="utf-8")
-    if "_dispatch_game_type" not in tt:
+    if "def _dispatch_game_type" not in tt:
         if not tt.endswith("\n"): tt += "\n"
         tt = tt + "def _dispatch_game_type(game_name):\n    \"\"\"I2 helper: map game name to action-space family. Never raises.\"\"\"\n    try:\n        import os as _osD\n        if _osD.environ.get(\"ARC3_DISPATCH_ON\", \"0\").strip().lower() not in (\"1\",\"true\",\"yes\",\"on\"):\n            return \"general\"\n        n = str(game_name or \"\").lower()\n        if any(k in n for k in (\"ar25\",\"lp85\",\"vc33\",\"tu93\")):\n            return \"click\"\n        if \"sb26\" in n:\n            return \"sequence\"\n        return \"general\"\n    except Exception:\n        return \"general\"\n" + "\n"
         tool.write_text(tt, encoding="utf-8")
