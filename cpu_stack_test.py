@@ -166,8 +166,7 @@ def hier_decompose_probe(llm, out_f, tries=2):
       detail.append("ERR:"+str(e)[:60])
   return {"best":best,"detail":detail,"pass":best>=1}
 
-def simulator_gate_test_relaxed(llm, out_f, tries=2):
-  import re
+def simulator_gate_test_relaxed(llm, out_f, tries=2):  import re
   trans=[(s,a,(s*3+a)%17) for s in range(10) for a in (1,2)][:20]
   body="\n".join("(%d,%d)->%d"%(s,a,n) for s,a,n in trans)
   prompt=("Write ONE python function step(state,action) returning next state. Observed transitions:\n"+body+"\nRule is arithmetic. Output exactly one fenced python block with the function, no other text.")
@@ -219,6 +218,96 @@ def simulator_gate_test_relaxed(llm, out_f, tries=2):
       detail.append("ERR:"+str(e)[:60])
   return {"best":ok,"detail":detail,"pass":ok>=16}
 
+# GOAL-AS-PROCEDURE probe (entry 797 structural gap, Quome diagnosis).
+# Part A: emit an ordered procedure + current step + next action from a mid-run state.
+# Part B: A/B stall vignette, base vs goal-ledger arm; fire = procedure-consistent next verb.
+def goal_ledger_probe(llm, out_f, tries=2):
+  import re as _re
+  state = ("8x8 grid. Ordered plan: 1 MOVE robot to key, 2 GET red key, 3 MOVE to door, "
+    "4 OPEN locked door, 5 GO exit. Progress: robot HAS key, robot at (6,6), door at (7,7) still locked. "
+    "List the ordered steps (1..N), then state CURRENT step number and the NEXT action.")
+  verbs = ("open", "unlock", "go", "exit", "move", "use")
+  ents = ("door", "key", "exit", "robot")
+  best = 0; detail = []
+  for i in range(tries):
+    try:
+      r = llm.create_chat_completion(
+        messages=[{"role": "system", "content": "Reply with numbered steps, then CURRENT step and NEXT action."},
+                  {"role": "user", "content": state}],
+        max_tokens=250, temperature=0.2)
+      txt = r["choices"][0]["message"]["content"]
+      lines = [l for l in txt.strip().split("\n") if _re.match(r"\s*\d+[\).\:] ", l)]
+      ll = txt.lower()
+      has_steps = len(lines) >= 3
+      has_pos = bool(_re.search(r"(current|step)\s*(is|:)?\s*[34]", ll))
+      has_next = any(v in ll for v in verbs) and any(e in ll for e in ents)
+      ok = 1 if (has_steps and has_pos and has_next) else 0
+      best = max(best, ok)
+      detail.append((len(lines), has_pos, has_next))
+      out_f.write(__import__("json").dumps({"t": "goal-emit-%d" % i, "mech": "goal", "fire": ok,
+        "next_action": "steps %d pos %d next %d" % (len(lines), has_pos, has_next),
+        "level": 0, "arm": "goal"}) + "\n")
+      # Part B: stall A/B
+      stall = ("You used 180 actions on level 7 (human par 40), no score increase in 30 actions. "
+        "Reply one line: CONTINUE or GIVE_UP, then one sentence.")
+      for arm, tail in (("base", ""), ("ledger", " Goal ledger: GOAL exit via door; DONE got key, at door; NEXT OPEN door then GO exit. State NEXT now.")):
+        r2 = llm.create_chat_completion(
+          messages=[{"role": "system", "content": "Reply one line: CONTINUE or GIVE_UP, then one sentence."},
+                    {"role": "user", "content": stall + tail}],
+          max_tokens=120, temperature=0)
+        t2 = r2["choices"][0]["message"]["content"].strip()
+        l2 = t2.lower()
+        proc = 1 if (any(v in l2 for v in ("open", "unlock", "door")) or ("go" in l2 and "exit" in l2)) else 0
+        out_f.write(__import__("json").dumps({"t": "goal-ab-%d-%s" % (i, arm), "mech": "goal",
+          "fire": proc, "next_action": t2[:200], "level": 7, "arm": arm}) + "\n")
+    except Exception as e:
+      detail.append("ERR:" + str(e)[:60])
+  return {"best": best, "detail": detail, "pass": best >= 1}
+
+# STRUCTURED-LOG synthesis probe (paper-mine transfer area): same arithmetic
+# transitions as the sim gate, but the prompt forces ENTITIES/RULE/EDGE lines
+# before the fenced step(). Verdict = format-follow + held-out delta vs relaxed.
+def sim_structured_test(llm, out_f, tries=2):
+  import re
+  trans = [(s, a, (s * 3 + a) % 17) for s in range(10) for a in (1, 2)][:20]
+  body = "\n".join("(%d,%d)->%d" % (s, a, n) for s, a, n in trans)
+  prompt = ("Observed transitions:\n" + body + "\nRule is arithmetic.\n"
+    "First write exactly 3 lines starting ENTITIES: / RULE: / EDGE: (your hypothesis), "
+    "then ONE fenced python block with function step(state,action) returning next state, no other text.")
+  ok = 0; detail = []
+  for i in range(tries):
+    try:
+      r = llm.create_chat_completion(
+        messages=[{"role": "system", "content": "Write 3 hypothesis lines, then exactly one python fence."},
+                  {"role": "user", "content": prompt}],
+        max_tokens=400, temperature=0.0)
+      txt = r["choices"][0]["message"]["content"]
+      fmt = sum(1 for k in ("ENTITIES:", "RULE:", "EDGE:") if k in txt)
+      m = re.search(FENCE + r"python(.*?)" + FENCE, txt, re.S | re.I) or re.search(FENCE + r"(.*?)" + FENCE, txt, re.S)
+      best = 0; held = 0
+      if m:
+        ns = {}
+        try:
+          exec(m.group(1), ns)
+        except Exception:
+          pass
+        fn = ns.get("step") or ns.get("f") or ns.get("next_state") or ns.get("predict") or ns.get("transition")
+        if callable(fn):
+          for s, a, n in trans:
+            try:
+              if int(fn(s, a)) == n: best += 1
+            except Exception:
+              pass
+          held = score_heldout(fn)
+      detail.append((fmt, best, held)); ok = max(ok, held)
+      out_f.write(__import__("json").dumps({"t": "sim-struct-%d" % i, "mech": "simstruct",
+        "fire": 1 if held >= 8 else 0,
+        "next_action": "fmt %d/3 train %d/20 heldout %d/10" % (fmt, best, held),
+        "level": 0, "arm": "hyper"}) + "\n")
+    except Exception as e:
+      detail.append("ERR:" + str(e)[:60])
+  return {"best": ok, "detail": detail, "pass": ok >= 8}
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True)
@@ -255,6 +344,14 @@ def main():
             summary["hier"] = hier_decompose_probe(llm, f, tries=2)
         except Exception as e:
             summary["hier_err"] = str(e)[:120]
+        try:
+            summary["goal_ledger"] = goal_ledger_probe(llm, f, tries=2)
+        except Exception as e:
+            summary["goal_ledger_err"] = str(e)[:120]
+        try:
+            summary["sim_structured"] = sim_structured_test(llm, f, tries=2)
+        except Exception as e:
+            summary["sim_structured_err"] = str(e)[:120]
     print(json.dumps(summary, indent=1))
 
 if __name__ == "__main__":
