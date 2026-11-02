@@ -245,30 +245,37 @@ def goal_ledger_probe(llm, out_f, tries=2):
   verbs = ("open", "unlock", "go", "exit", "move", "use")
   ents = ("door", "key", "exit", "robot")
   best = 0; detail = []
+  # entry 803: base vs harness-injected progress state (acting-class test)
+  state_arms = (("base", state),
+    ("injected", state + " HARNESS RECORD (authoritative, overrides memory): key OBTAINED at t=12, steps 1-3 COMPLETE. "
+      "You are at step 4 of 5. Do NOT repeat completed steps. State CURRENT step and NEXT action."))
   for i in range(tries):
     try:
-      r = llm.create_chat_completion(
-        messages=[{"role": "system", "content": "Reply with numbered steps, then CURRENT step and NEXT action."},
-                  {"role": "user", "content": state}],
-        max_tokens=250, temperature=0.2)
-      txt = r["choices"][0]["message"]["content"]
-      lines = [l for l in txt.strip().split("\n") if _re.match(r"\s*\d+[\).\:] ", l)]
-      ll = txt.lower()
-      has_steps = len(lines) >= 3
-      has_pos = bool(_re.search(r"(current|step)\s*(is|:)?\s*[34]", ll))
-      has_next = any(v in ll for v in verbs) and any(e in ll for e in ents)
-      ok = 1 if (has_steps and has_pos and has_next) else 0
-      best = max(best, ok)
-      detail.append((len(lines), has_pos, has_next))
-      # harness-side parse (entry 802): same prose, harness extracts structure
-      pp = parse_procedure_prose(txt)
-      pok = 1 if (pp["n"] >= 2 and pp["next"][1] in ("door", "exit", "key")) else 0
-      out_f.write(__import__("json").dumps({"t": "goal-emit-%d" % i, "mech": "goal", "fire": ok,
-        "next_action": "steps %d pos %d next %d" % (len(lines), has_pos, has_next),
-        "level": 0, "arm": "goal"}) + "\n")
-      out_f.write(__import__("json").dumps({"t": "goal-parse-%d" % i, "mech": "goalparse", "fire": pok,
-        "next_action": "parsed %d steps next %s/%s raw %s" % (pp["n"], pp["next"][0], pp["next"][1], txt[:300]),
-        "level": 0, "arm": "goal"}) + "\n")
+      for sarm, sprompt in state_arms:
+        r = llm.create_chat_completion(
+          messages=[{"role": "system", "content": "Reply with numbered steps, then CURRENT step and NEXT action."},
+                    {"role": "user", "content": sprompt}],
+          max_tokens=250, temperature=0.2)
+        txt = r["choices"][0]["message"]["content"]
+        lines = [l for l in txt.strip().split("\n") if _re.match(r"\s*\d+[\).\:] ", l)]
+        ll = txt.lower()
+        has_steps = len(lines) >= 3
+        has_pos = bool(_re.search(r"(current|step)\s*(is|:)?\s*[34]", ll))
+        has_next = any(v in ll for v in verbs) and any(e in ll for e in ents)
+        ok = 1 if (has_steps and has_pos and has_next) else 0
+        best = max(best, ok)
+        detail.append((len(lines), has_pos, has_next))
+        # harness-side parse (entry 802): same prose, harness extracts structure
+        pp = parse_procedure_prose(txt)
+        pok = 1 if (pp["n"] >= 2 and pp["next"][1] in ("door", "exit", "key")) else 0
+        # entry 803: step-4 consistency = parsed NEXT is open-door/go-exit (not restart at key)
+        step4 = 1 if (pp["next"] in (("open", "door"), ("unlock", "door"), ("go", "exit"), ("exit", "exit"), ("go", "door"), ("move", "door"))) else 0
+        out_f.write(__import__("json").dumps({"t": "goal-emit-%d" % i, "mech": "goal", "fire": ok,
+          "next_action": "steps %d pos %d next %d" % (len(lines), has_pos, has_next),
+          "level": 0, "arm": "goal"}) + "\n")
+        out_f.write(__import__("json").dumps({"t": "goal-parse-%d-%s" % (i, sarm), "mech": "goalparse", "fire": pok,
+          "next_action": "parsed %d steps next %s/%s step4 %d raw %s" % (pp["n"], pp["next"][0], pp["next"][1], step4, txt[:300]),
+          "level": 0, "arm": "goal"}) + "\n")
       # Part B: stall A/B
       stall = ("You used 180 actions on level 7 (human par 40), no score increase in 30 actions. "
         "Reply one line: CONTINUE or GIVE_UP, then one sentence.")
