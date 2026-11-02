@@ -2,6 +2,8 @@
 # Lives on doishy-doish/duck-harness, branch cpu-stack-tests (our CPU repo; v4lend fork untouched).
 # Dispatch: POST /repos/doishy-doish/duck-harness/actions/workflows/forge-v4lend-poc.yml/dispatches
 #   {ref:"cpu-stack-tests", inputs:{contracts:"StaleApprovalPoC|V7BorrowRidingPoC"}} (classic PAT, expect 204)
+# Readback: job logs are NOT API-readable — the workflow pushes poc-<run_id>.log to branch
+#   poc-logs/<run_id>; fetch via raw.githubusercontent (public, no auth).
 name: forge-v4lend-poc
 
 on:
@@ -10,6 +12,9 @@ on:
       contracts:
         description: "forge --match-contract regex"
         default: "StaleApprovalPoC|V7BorrowRidingPoC"
+
+permissions:
+  contents: write
 
 jobs:
   poc:
@@ -36,6 +41,17 @@ jobs:
           cd v4lend
           forge test --match-contract "${{ inputs.contracts }}" -vvv 2>&1 | tee $GITHUB_WORKSPACE/poc.log
           test ${PIPESTATUS[0]} -eq 0
+      - name: push log back to repo
+        if: always()
+        working-directory: harness
+        run: |
+          git config user.email "poc@local"
+          git config user.name "poc"
+          git checkout -b poc-logs/${{ github.run_id }}
+          cp $GITHUB_WORKSPACE/poc.log ./poc-${{ github.run_id }}.log
+          git add ./poc-${{ github.run_id }}.log
+          git commit -m "poc log ${{ github.run_id }}" || true
+          git push origin poc-logs/${{ github.run_id }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:
