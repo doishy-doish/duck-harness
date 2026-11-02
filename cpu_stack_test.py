@@ -219,6 +219,21 @@ def simulator_gate_test_relaxed(llm, out_f, tries=2):
       detail.append("ERR:"+str(e)[:60])
   return {"best":ok,"detail":detail,"pass":ok>=16}
 
+# HARNESS-SIDE prose parser (entry 802: model emits prose, harness extracts structure).
+# parse_procedure_prose(txt) -> steps=[(verb, entity)...] in mention order, position, next.
+def parse_procedure_prose(txt):
+  import re as _re
+  ll = txt.lower()
+  steps = [(m.group(1), m.group(2)) for m in
+    _re.finditer(r"\b(move|get|open|unlock|go|exit|push|collect|carry|use|take|grab)\b[^.\n]{0,40}?\b(robot|key|door|exit)\b", ll)]
+  ded = []
+  for s in steps:
+    if not ded or s != ded[-1]: ded.append(s)
+  pos = None
+  m2 = _re.search(r"(current|now|at|step)\D{0,10}([1-9])", ll)
+  if m2: pos = int(m2.group(2))
+  return {"steps": ded, "n": len(ded), "pos": pos, "next": ded[-1] if ded else (None, None)}
+
 # GOAL-AS-PROCEDURE probe (entry 797 structural gap, Quome diagnosis).
 # Part A: emit an ordered procedure + current step + next action from a mid-run state.
 # Part B: A/B stall vignette, base vs goal-ledger arm; fire = procedure-consistent next verb.
@@ -245,8 +260,14 @@ def goal_ledger_probe(llm, out_f, tries=2):
       ok = 1 if (has_steps and has_pos and has_next) else 0
       best = max(best, ok)
       detail.append((len(lines), has_pos, has_next))
+      # harness-side parse (entry 802): same prose, harness extracts structure
+      pp = parse_procedure_prose(txt)
+      pok = 1 if (pp["n"] >= 2 and pp["next"][1] in ("door", "exit", "key")) else 0
       out_f.write(__import__("json").dumps({"t": "goal-emit-%d" % i, "mech": "goal", "fire": ok,
         "next_action": "steps %d pos %d next %d" % (len(lines), has_pos, has_next),
+        "level": 0, "arm": "goal"}) + "\n")
+      out_f.write(__import__("json").dumps({"t": "goal-parse-%d" % i, "mech": "goalparse", "fire": pok,
+        "next_action": "parsed %d steps next %s/%s raw %s" % (pp["n"], pp["next"][0], pp["next"][1], txt[:300]),
         "level": 0, "arm": "goal"}) + "\n")
       # Part B: stall A/B
       stall = ("You used 180 actions on level 7 (human par 40), no score increase in 30 actions. "
