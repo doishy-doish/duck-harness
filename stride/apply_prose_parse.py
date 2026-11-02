@@ -31,7 +31,13 @@ INJECT_NEW = ("user_prompt += self._retained_function_context()\n"
 MECH_NEEDLE = 'getattr(self, "_h1_switches_this_level", 0)'
 MECH_OLD = 'getattr(self, "_h1_switches_this_level", 0))'
 MECH_NEW = ('getattr(self, "_h1_switches_this_level", 0))'
-            ' + " pp_fed=%s" % (getattr(self, "_pp_fed_this_level", 0),)')
+            ' + " pp_fed=%s pp_ref=%s" % (getattr(self, "_pp_fed_this_level", 0), getattr(self, "_pp_refused_this_level", 0)))')
+
+PP_GUARD_ANCHOR = "self._noop_guard_pre_hash = state_hash"
+PP_GUARD_NEW = ("self._noop_guard_pre_hash = state_hash\n"
+                "        _pp_fire, _pp_detail = _pp_refuse_regressed(self, level, action_name, action_data)\n"
+                "        if _pp_fire:\n"
+                "            return (\"pp_refuse\", _pp_detail)")
 
 PP_CORE = '''
 import re as _reP
@@ -80,6 +86,13 @@ def _pp_subgoals(text):
     return out
 
 
+_PP_STOP = ("with", "from", "that", "this", "then", "into",
+            "have", "has", "are", "was", "were", "been", "the")
+_PP_SYN = {"move": ("move", "go"), "get": ("get", "take", "grab", "carry", "collect"),
+           "open": ("open", "unlock"), "click": ("click", "press"),
+           "use": ("use", "push"), "go": ("go", "move")}
+
+
 def _pp_feed_sg(agent, level, text):
     """Fill an empty SG ladder from parsed prose. Returns fed count. Never raises."""
     try:
@@ -113,6 +126,44 @@ def _pp_feed_sg(agent, level, text):
         return _added
     except Exception:
         return 0
+
+
+def _pp_refuse_regressed(agent, level, action_name, action_data):
+    """Refuse proposals matching a PASSED subgoal (idx < current). Never raises."""
+    try:
+        if not _pp_parse_on():
+            return (False, "")
+        _sgs = list(getattr(agent, "_hailmary_subgoals", []) or [])
+        if len(_sgs) < 2:
+            return (False, "")
+        _cur = int(getattr(agent, "_hailmary_sg_idx", 0) or 0)
+        if _cur <= 0 or _cur >= len(_sgs):
+            return (False, "")
+        _prop = (str(action_name or "") + " " + str(action_data or "")).lower()
+        for _j in range(_cur):
+            _txt = ""
+            try:
+                _txt = ((_sgs[_j].get("text", "")) or "").lower()
+            except Exception:
+                pass
+            if not _txt:
+                continue
+            _verb = next((_v for _v in _PP_VERBS if _v in _txt), "")
+            _syns = _PP_SYN.get(_verb, (_verb,)) if _verb else ()
+            _keys = [_w for _w in _reP.split(r"\\W+", _txt)
+                     if len(_w) >= 4 and _w not in _PP_STOP]
+            _hit = ((any(_s in _prop for _s in _syns) and any(_k in _prop for _k in _keys))
+                    or sum(1 for _k in _keys if _k in _prop) >= 2)
+            if _hit:
+                try:
+                    agent._pp_refused_this_level = int(getattr(agent, "_pp_refused_this_level", 0) or 0) + 1
+                except Exception:
+                    pass
+                return (True, "pp_refuse: repeats passed subgoal %d; act on current subgoal %d instead."
+                        % (_j + 1, _cur + 1))
+        return (False, "")
+    except Exception:
+        return (False, "")
 '''
 
 
@@ -134,6 +185,8 @@ def main():
     if "_pp_feed_sg" not in tt:
         tt, r1 = replace_or_throw(tt, INJECT_ANCHOR, INJECT_NEW, "pp-inject")
         print("  " + r1)
+        tt, r2 = replace_or_throw(tt, PP_GUARD_ANCHOR, PP_GUARD_NEW, "pp-guard")
+        print("  " + r2)
         if not tt.endswith("\n"):
             tt += "\n"
         tt = tt + PP_CORE + "\n"
