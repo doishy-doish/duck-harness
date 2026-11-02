@@ -199,6 +199,10 @@ def main():
         try:
             summary["hyper_hash"] = hyper_hash_selftest(f)
             summary["hyper_dispatch"] = hyper_dispatch_selftest()
+            try:
+                summary["temp_diverse"] = temp_diverse_sample(llm, "You used 180 actions on level 7 (human par 40), no score increase in 30 actions. Reply one line: CONTINUE or GIVE_UP, then one sentence.")
+            except Exception as e:
+                summary["temp_diverse_err"] = str(e)[:120]
         except Exception as e:
             summary["hyper_hash_err"] = str(e)[:120]
         try:
