@@ -132,7 +132,7 @@ def replace_or_throw(text, anchor, new, label, marker):
         return text, "%s: already applied (skip)" % label
     count = text.count(anchor)
     if count != 1:
-        fail("anchor for %s found %dx (want 1)" % (label, count))
+        fail("anchor for %s found %d times (want 1)" % (label, count))
     return text.replace(anchor, new, 1), "%s: applied" % label
 
 
