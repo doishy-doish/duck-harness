@@ -166,7 +166,8 @@ def hier_decompose_probe(llm, out_f, tries=2):
       detail.append("ERR:"+str(e)[:60])
   return {"best":best,"detail":detail,"pass":best>=1}
 
-def simulator_gate_test_relaxed(llm, out_f, tries=2):  import re
+def simulator_gate_test_relaxed(llm, out_f, tries=2):
+  import re
   trans=[(s,a,(s*3+a)%17) for s in range(10) for a in (1,2)][:20]
   body="\n".join("(%d,%d)->%d"%(s,a,n) for s,a,n in trans)
   prompt=("Write ONE python function step(state,action) returning next state. Observed transitions:\n"+body+"\nRule is arithmetic. Output exactly one fenced python block with the function, no other text.")
