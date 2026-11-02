@@ -183,7 +183,7 @@ def simulator_gate_test_relaxed(llm, out_f, tries=2):
     if lines: cands.append("\n".join(lines))
     cands.append(txt)
     return cands
-  ok=0; detail=[]; besthits=[]
+  ok=0; detail=[]; besthits=[]; bestcode=""
   for i in range(tries):
     try:
       r=llm.create_chat_completion(messages=[{"role":"system","content":"Output exactly one python fence."},{"role":"user","content":prompt}],max_tokens=300,temperature=0.0)
@@ -211,11 +211,18 @@ def simulator_gate_test_relaxed(llm, out_f, tries=2):
             except Exception:
               pass
           held=score_heldout(fn)
-          out_f.write(__import__("json").dumps({"t":"sim-relaxed-heldout-%d"%i,"mech":"simcontrol","fire":1 if held>=8 else 0,"next_action":"heldout %d/10 (train %d/20)"%(held,good),"level":0,"arm":"hyper","hits":hitpairs})+"\n")
-          if good>best: besthits=hitpairs
+          try:
+            _hh=[]
+            for _s,_a,_n in HELDOUT:
+              try:
+                if int(fn(_s,_a))==_n: _hh.append([_s,_a])
+              except Exception: pass
+          except Exception: _hh=[]
+          out_f.write(__import__("json").dumps({"t":"sim-relaxed-heldout-%d"%i,"mech":"simcontrol","fire":1 if held>=8 else 0,"next_action":"heldout %d/10 (train %d/20)"%(held,good),"level":0,"arm":"hyper","hits":hitpairs,"heldhits":_hh})+"\n")
+          if good>best: besthits=hitpairs; bestcode=code[:500]
           best=max(best,good)
       detail.append(best); ok=max(ok,best)
-      out_f.write(__import__("json").dumps({"t":"sim-relaxed-%d"%i,"mech":"simulator","fire":1 if best>=16 else 0,"next_action":"repro %d/20"%best,"level":0,"arm":"hyper","hits":besthits})+"\n")
+      out_f.write(__import__("json").dumps({"t":"sim-relaxed-%d"%i,"mech":"simulator","fire":1 if best>=16 else 0,"next_action":"repro %d/20"%best,"level":0,"arm":"hyper","hits":besthits,"code":bestcode})+"\n")
     except Exception as e:
       detail.append("ERR:"+str(e)[:60])
   return {"best":ok,"detail":detail,"pass":ok>=16}
