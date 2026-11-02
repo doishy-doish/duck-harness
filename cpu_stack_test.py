@@ -130,6 +130,57 @@ def simulator_gate_test(llm, out_f, tries=2):
       detail.append("ERR:"+str(e)[:60])
   return {"best":ok,"detail":detail,"pass":ok>=16}
 
+def simulator_gate_test_relaxed(llm, out_f, tries=2):
+  import re
+  trans=[(s,a,(s*3+a)%17) for s in range(10) for a in (1,2)][:20]
+  body="\n".join("(%d,%d)->%d"%(s,a,n) for s,a,n in trans)
+  prompt=("Write ONE python function step(state,action) returning next state. Observed transitions:\n"+body+"\nRule is arithmetic. Output exactly one fenced python block with the function, no other text.")
+  def extract_candidates(txt):
+    cands=[]
+    m=re.search(FENCE+r"python(.*?)"+FENCE,txt,re.S|re.I)
+    if m: cands.append(m.group(1))
+    m2=re.search(FENCE+r"(.*?)"+FENCE,txt,re.S)
+    if m2: cands.append(m2.group(1))
+    m3=re.search(r"(def\s+step\s*\(.*?\)\s*:[\s\S]*?)(?:\n\S|\Z)",txt)
+    if m3: cands.append(m3.group(1))
+    lines=[l for l in txt.split("\n") if re.match(r"\s*(def |import |from |return |for |if |while |[a-zA-Z_][a-zA-Z0-9_]*\s*=)",l)]
+    if lines: cands.append("\n".join(lines))
+    cands.append(txt)
+    return cands
+  ok=0; detail=[]
+  for i in range(tries):
+    try:
+      r=llm.create_chat_completion(messages=[{"role":"system","content":"Output exactly one python fence."},{"role":"user","content":prompt}],max_tokens=300,temperature=0.0)
+      txt=r["choices"][0]["message"]["content"]
+      best=0
+      for code in extract_candidates(txt):
+        ns={}
+        try:
+          exec(code,ns)
+        except Exception:
+          continue
+        fn=ns.get("step") or ns.get("f") or ns.get("next_state") or ns.get("predict") or ns.get("transition")
+        if not callable(fn):
+          for v in ns.values():
+            if callable(v):
+              try:
+                int(v(0,1)); fn=v; break
+              except Exception:
+                pass
+        if callable(fn):
+          good=0
+          for s,a,n in trans:
+            try:
+              if int(fn(s,a))==n: good+=1
+            except Exception:
+              pass
+          best=max(best,good)
+      detail.append(best); ok=max(ok,best)
+      out_f.write(__import__("json").dumps({"t":"sim-relaxed-%d"%i,"mech":"simulator","fire":1 if best>=16 else 0,"next_action":"repro %d/20"%best,"level":0,"arm":"hyper"})+"\n")
+    except Exception as e:
+      detail.append("ERR:"+str(e)[:60])
+  return {"best":ok,"detail":detail,"pass":ok>=16}
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", required=True)
@@ -154,6 +205,10 @@ def main():
             summary["simulator"] = simulator_gate_test(llm, f, tries=2)
         except Exception as e:
             summary["simulator_err"] = str(e)[:120]
+        try:
+            summary["simulator_relaxed"] = simulator_gate_test_relaxed(llm, f, tries=2)
+        except Exception as e:
+            summary["simulator_relaxed_err"] = str(e)[:120]
     print(json.dumps(summary, indent=1))
 
 if __name__ == "__main__":
