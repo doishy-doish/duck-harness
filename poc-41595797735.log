@@ -1,0 +1,28 @@
+Error: Compiler run failed:
+Warning (2519): This declaration shadows an existing declaration.
+    --> test/hook/RevertHook.t.sol:1714:23:
+     |
+1714 |     function _mintRaw(int24 tickLower, int24 tickUpper, uint128 liquidity, address owner, bytes memory hookData)
+     |                       ^^^^^^^^^^^^^^^
+Note: The shadowed declaration is here:
+  --> test/hook/RevertHook.t.sol:77:5:
+   |
+77 |     int24 tickLower;
+   |     ^^^^^^^^^^^^^^^
+
+Warning (2519): This declaration shadows an existing declaration.
+    --> test/hook/RevertHook.t.sol:1714:40:
+     |
+1714 |     function _mintRaw(int24 tickLower, int24 tickUpper, uint128 liquidity, address owner, bytes memory hookData)
+     |                                        ^^^^^^^^^^^^^^^
+Note: The shadowed declaration is here:
+  --> test/hook/RevertHook.t.sol:78:5:
+   |
+78 |     int24 tickUpper;
+   |     ^^^^^^^^^^^^^^^
+
+Error (9582): Member "mint" not found or not visible after argument-dependent lookup in contract IPositionManager.
+  --> test/vault/invariants/RemintApprovalCarryPoC.t.sol:45:25:
+   |
+45 |         (uint256 td,) = positionManager.mint(poolKey, -600, 600, 1e11, type(uin ...
+   |                         ^^^^^^^^^^^^^^^^^^^^
