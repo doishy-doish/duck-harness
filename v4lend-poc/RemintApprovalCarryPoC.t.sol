@@ -4,6 +4,7 @@ pragma solidity ^0.8.30;
 import {V4VaultLocalBase} from "test/vault/support/V4VaultLocalBase.sol";
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
+import {EasyPosm} from "test/utils/libraries/EasyPosm.sol";
 import {Constants as V4Constants} from "@uniswap/v4-core/test/utils/Constants.sol";
 
 /// @notice Reminting transformer: holds a pre-minted position, donates it to the vault
@@ -26,6 +27,7 @@ contract RemintDonor {
 /// approval for T becomes approval for T' without fresh owner consent, and the operator
 /// can then transform T' solo. Distinct from remove/re-create resurrection (separate PoC).
 contract RemintApprovalCarryPoC is V4VaultLocalBase {
+    using EasyPosm for IPositionManager;
     RemintDonor internal donor;
     address internal operator = makeAddr("operator");
 
