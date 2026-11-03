@@ -14,6 +14,9 @@ contract RemintDonor {
     uint256 internal donorTid;
     constructor(address _pm) { pm = IPositionManager(_pm); }
     function setDonor(uint256 tid) external { donorTid = tid; }
+    function onERC721Received(address, address, uint256, bytes calldata) external pure returns (bytes4) {
+        return bytes4(keccak256("onERC721Received(address,address,uint256,bytes)"));
+    }
     fallback() external {
         if (donorTid != 0) {
             uint256 t = donorTid;
