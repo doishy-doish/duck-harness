@@ -47,11 +47,8 @@ contract StatefulInvariants is V4VaultLocalBase {
         uint256 op = s % 10;
         if (op == 0) {
             uint128 liq = uint128(1e10 + (s >> 8) % 1e12);
-            (uint256 tid,) = _mintRaw(liq);
-            IERC721(address(positionManager)).approve(address(vault), tid);
-            try vault.create(tid, borrower) {
-                _track(tid);
-            } catch {}
+            uint256 tid = _createLoan(liq);
+            _track(tid);
         } else if (op == 1) {
             if (known.length == 0) return;
             uint256 tid = known[(s >> 8) % known.length];
@@ -146,15 +143,6 @@ contract StatefulInvariants is V4VaultLocalBase {
         } catch {
             return (false, address(0));
         }
-    }
-
-    function _mintRaw(uint128 liquidity) internal returns (uint256 tokenId, uint256 x) {
-        (tokenId,) = positionManager.mint(
-            poolKey, -600, 600, liquidity,
-            type(uint128).max, type(uint128).max,
-            address(this), block.timestamp, bytes("")
-        );
-        x = 0;
     }
 
     function _track(uint256 tid) internal {
